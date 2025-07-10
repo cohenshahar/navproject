@@ -1,0 +1,274 @@
+%% Robot Simulation Main: Free and PID-Controlled Motion with Energy Tracking and Animation
+clc; clear;
+
+%% Parameters
+m1 = 1; m2 = 1; m3 = 1; m4 = 1;
+L1 = 0.5; L2 = 0.5; L3 = 0.5; L4 = 0.2; g = 9.81;
+I1 = (1/3)*m1*L1^2; I2 = (1/3)*m2*L2^2;
+I3 = (1/3)*m3*L3^2; I4 = (1/3)*m4*L4^2;
+params = [m1 m2 m3 m4 L1 L2 L3 L4 I1 I2 I3 I4];
+
+%% Initial and target states
+q0 = [0.5; 0; pi/4; -pi/4];
+qd0 = [0; 0; 0; 0];
+x0 = [q0; qd0];
+tspan = [0 5];
+
+% q_des = [0.6; pi/4; pi/6; -pi/6];
+qd_des = [0; 0; 0; 0];
+Kp = diag([150 100 100 80]);
+% Kd = diag([30 20 15 10]);
+% Replace current Kd with critically damped version
+Kd = 2 * sqrt(Kp);  % Gives better stability (less oscillation)
+
+%% Task-space desired grip position
+p_grip_des = [0.4; 0.3; 0.3];  % Target in XYZ
+
+%% Inverse Kinematics to find joint target
+q_des = inverse_kinematics(p_grip_des, q0, L1, L2, L3, L4);
+fprintf('q_des = [%.3f %.3f %.3f %.3f]\n', q_des);
+q_des(1) = min(max(q_des(1), 0), L2);
+fprintf('After d check, q_des = [%.3f %.3f %.3f %.3f]\n', q_des);
+fprintf('grip_position(q_des) = [%.3f %.3f %.3f]\n', grip_position(q_des, L1, L2, L3, L4));
+fprintf('Target = [%.3f %.3f %.3f]\n', p_grip_des);
+
+
+%% Free motion simulation (zero input)
+u_zero = @(t,q,dq) zeros(4,1);
+[t1, x1] = ode45(@(t,x) robot_dynamics(t, x, u_zero, params), tspan, x0);
+
+%% Controlled motion simulation
+u_pid = @(t,q,dq) robot_control(q, dq, q_des, qd_des, Kp, Kd, params);
+[t2, x2] = ode45(@(t,x) robot_dynamics(t, x, u_pid, params), tspan, x0);
+
+%% Energy tracking
+KE = zeros(length(t2),1);
+PE = zeros(length(t2),1);
+for i = 1:length(t2)
+    q  = x2(i,1:4)';
+    dq = x2(i,5:8)';
+    KE(i) = KineticEnergy(q, dq, params);
+    PE(i) = PotentialEnergy(q, [params(1:4), params(5:8), g]);
+end
+
+%% Plot results
+figure;
+subplot(3,1,1);
+plot(t2, x2(:,1:4));
+legend('d','\theta_1','\theta_2','\theta_3');
+title('Joint Configuration (Controlled Motion)');
+grid on;
+
+subplot(3,1,2);
+plot(t2, KE, t2, PE, t2, KE + PE);
+legend('Kinetic','Potential','Total');
+title('Energy over Time');
+grid on;
+
+subplot(3,1,3);
+tau_data = zeros(length(t2), 4);
+for i = 1:length(t2)
+    q  = x2(i,1:4)'; dq = x2(i,5:8)';
+    tau_data(i,:) = u_pid(0, q, dq)';
+end
+plot(t2, tau_data);
+legend('\tau_1','\tau_2','\tau_3','\tau_4');
+title('Control Torques');
+grid on;
+
+%% Animate and export
+animate_robot(t1, x1(:,1:4), L1, L2, L3, L4, 'free_motion.mp4', []);
+animate_robot(t2, x2(:,1:4), L1, L2, L3, L4, 'controlled_motion.mp4', p_grip_des);
+
+%% Check final end-effector position
+q_final = x2(end,1:4)';
+p_final = grip_position(q_final, L1, L2, L3, L4);
+err = norm(p_final - p_grip_des);
+
+fprintf('Final grip position: [%.3f %.3f %.3f]\n', p_final);
+fprintf('Target grip position: [%.3f %.3f %.3f]\n', p_grip_des);
+fprintf('Position error: %.3f m\n', err);
+
+if err > 0.02
+    fprintf('❌ Target unreachable!\n');
+else
+    fprintf('✅ Target reached.\n');
+end
+
+%% Export
+writematrix([t2, x2], 'trajectory_data.csv');
+writematrix([t2, tau_data], 'torques.csv');
+writematrix([t2, KE, PE], 'energy.csv');
+
+
+%% Joint limit checking
+function q_clamped = clamp_q(q, L2)
+    q_clamped = q;
+    q_clamped(1) = min(max(q(1), 0), L2); % d ∈ [0, L2]
+
+    % Joint limits for angles (θ₁, θ₂, θ₃)
+    theta_limits = [-pi, pi;     % θ₁
+                    -pi/4, 5*pi/4; % θ₂
+                    -pi/4, 5*pi/4];% θ₃
+
+    for i = 1:3
+        q_clamped(i+1) = min(max(q(i+1), theta_limits(i,1)), theta_limits(i,2));
+    end
+end
+
+%% Dynamics function
+function dx = robot_dynamics(~, x, u_func, params)
+    q = x(1:4); dq = x(5:8);
+    q = clamp_q(q, params(6));  % Enforce limits
+    tau = u_func(0, q, dq);
+    M = M_matrix(q, params);
+    C = C_matrix(q, dq, params);
+    G = G_vector(q, [params(1:4), params(5:8), 9.81]);
+    ddq = M \ (tau - C*dq - G);
+    dx = [dq; ddq];
+end
+
+%% Control function
+function tau = robot_control(q, dq, q_des, dq_des, Kp, Kd, params)
+    e = q_des - q;
+    de = dq_des - dq;
+    ddq_des = Kp*e + Kd*de;
+    M = M_matrix(q, params);
+    C = C_matrix(q, dq, params);
+    G = G_vector(q, [params(1:4), params(5:8), 9.81]);
+    tau = M*ddq_des + C*dq + G;
+end
+
+%% Forward kinematics for end-effector
+function p = grip_position(q, L1, L2, L3, L4)
+    d = q(1); t1 = q(2); t2 = q(3); t3 = q(4);
+    
+    if d > L2
+        d = L2;
+    elseif d < 0
+        d = 0;
+    end
+
+    % Local transforms (matching symbolic definitions)
+    T01 = [trotz(t1), [0; 0; L1]; 0 0 0 1];        % base + height
+    T12 = [eye(3), [0; 0; d]; 0 0 0 1];            % prismatic
+    T23 = [troty(t2), [0; 0; 0]; 0 0 0 1];         % θ₂
+    T34 = [eye(3), [0; 0; L3]; 0 0 0 1];           % Link 3
+    T45 = [troty(t3), [0; 0; 0]; 0 0 0 1];         % θ₃
+    T56 = [eye(3), [0; 0; L4]; 0 0 0 1];           % Link 4 (grip)
+
+    % Full transform to end-effector
+    T_total = T01 * T12 * T23 * T34 * T45 * T56;
+
+    % Position of end-effector (grip)
+    p = T_total(1:3, 4);
+end
+
+
+%% Animation with optional target marker
+function animate_robot(t, q_data, L1, L2, L3, L4, filename, p_target)
+    v = VideoWriter(filename, 'MPEG-4');
+    v.FrameRate = 10;
+    open(v);
+
+    figure;
+    for i = 1:10:length(t)
+        d = q_data(i,1);
+        t1 = q_data(i,2);
+        t2 = q_data(i,3);
+        t3 = q_data(i,4);
+
+        if d > L2
+            d = L2;
+        elseif d < 0
+            d = 0;
+        end
+
+        T01 = [trotz(t1), [0; 0; L1]; 0 0 0 1];        % base + height
+        T12 = [eye(3), [0; 0; d]; 0 0 0 1];            % prismatic
+        T23 = [troty(t2), [0; 0; 0]; 0 0 0 1];         % θ₂
+        T34 = [eye(3), [0; 0; L3]; 0 0 0 1];           % Link 3
+        T45 = [troty(t3), [0; 0; 0]; 0 0 0 1];         % θ₃
+        T56 = [eye(3), [0; 0; L4]; 0 0 0 1];           % Link 4 (grip)
+
+        T02 = T01 * T12;
+        T03 = T02 * T23;
+        T04 = T03 * T34;
+        T05 = T04 * T45;
+        T06 = T05 * T56;
+
+        % Positions
+        p0 = [0; 0; 0];
+        p1 = T01(1:3,4);
+        p2 = T02(1:3,4);
+        p3 = T03(1:3,4);
+        p4 = T04(1:3,4);
+        p5 = T05(1:3,4);
+        p6 = T06(1:3,4);  % gripper
+
+        plot3([p0(1) p1(1)], [p0(2) p1(2)], [p0(3) p1(3)], 'k-', 'LineWidth', 2); hold on;
+        plot3([p1(1) p2(1)], [p1(2) p2(2)], [p1(3) p2(3)], 'b-', 'LineWidth', 2);
+        plot3([p2(1) p3(1)], [p2(2) p3(2)], [p2(3) p3(3)], 'r-', 'LineWidth', 2);
+        plot3([p3(1) p4(1)], [p3(2) p4(2)], [p3(3) p4(3)], 'g-', 'LineWidth', 2);
+        plot3([p4(1) p5(1)], [p4(2) p5(2)], [p4(3) p5(3)], 'm-', 'LineWidth', 2);
+        plot3([p5(1) p6(1)], [p5(2) p6(2)], [p5(3) p6(3)], 'c-', 'LineWidth', 2);  % gripper
+        plot3(p6(1), p6(2), p6(3), 'ko', 'MarkerSize', 6, 'MarkerFaceColor', 'k');
+
+        if ~isempty(p_target)
+            plot3(p_target(1), p_target(2), p_target(3), 'rx', 'MarkerSize', 10, 'LineWidth', 2);
+        end
+
+        axis equal;
+        axis([-1 1 -1 1 0 2]);
+        xlabel('X'); ylabel('Y'); zlabel('Z');
+        grid on;
+        title(sprintf('Time = %.2f s', t(i)));
+        drawnow;
+        hold off;
+
+        frame = getframe(gcf);
+        writeVideo(v, frame);
+    end
+    close(v);
+end
+
+%% Inverse Kinematics Solver
+
+function q_sol = inverse_kinematics(p_des, q_init, L1, L2, L3, L4)
+    % Uses fmincon to handle bounds on all 4 variables
+    options = optimoptions('fmincon', ...
+        'Display', 'none', ...
+        'Algorithm', 'sqp', ...
+        'FunctionTolerance', 1e-6, ...
+        'StepTolerance', 1e-8, ...
+        'MaxIterations', 1000);
+
+    % Bounds
+    lb = [0; -pi; -pi/4; -pi/4];
+    ub = [L2; pi; 5*pi/4; 5*pi/4];
+
+    % Objective: minimize squared error to target
+    cost = @(q) norm(grip_position(q, L1, L2, L3, L4) - p_des)^2;
+
+    % Solve
+    [q_sol, fval, exitflag] = fmincon(cost, q_init, [], [], [], [], lb, ub, [], options);
+
+    if exitflag <= 0
+        warning('❗ Inverse kinematics (fmincon) did not converge.');
+    else
+        fprintf("✅ fmincon IK succeeded: error = %.4f\n", sqrt(fval));
+    end
+end
+
+%% Rotation helpers
+function R = trotz(theta)
+    R = [cos(theta), -sin(theta), 0;
+         sin(theta),  cos(theta), 0;
+              0,           0,    1];
+end
+
+function R = troty(theta)
+    R = [ cos(theta), 0, sin(theta);
+                 0, 1,         0;
+         -sin(theta), 0, cos(theta)];
+end

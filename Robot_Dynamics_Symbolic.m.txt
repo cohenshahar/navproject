@@ -1,0 +1,110 @@
+%% Symbolic Dynamics for 4-DOF Robotic Arm with Link 4 Included
+% This script generates M(q), C(q,dq), G(q), and energy functions
+
+clc; clear;
+
+%% Symbolic definitions
+syms d theta1 theta2 theta3 real
+syms L1 L2 L3 L4 real
+syms dd dtheta1 dtheta2 dtheta3 real
+syms m1 m2 m3 m4 I1 I2 I3 I4 g real
+
+q  = [d; theta1; theta2; theta3];
+dq = [dd; dtheta1; dtheta2; dtheta3];
+
+%% Homogeneous transforms
+T01 = [trotz(theta1), [0; 0; L1]; 0 0 0 1];    % base + height
+T12 = [eye(3), [0; 0; d]; 0 0 0 1];            % prismatic
+T23 = [troty(theta2), [0; 0; 0]; 0 0 0 1];     % θ₂
+T34 = [eye(3), [0; 0; L3]; 0 0 0 1];           % Link 3
+T45 = [troty(theta3), [0; 0; 0]; 0 0 0 1];     % θ₃
+T56 = [eye(3), [0; 0; L4]; 0 0 0 1];           % Link 4 (grip)
+T3mid = [eye(3), [0; 0; L3/2]; 0 0 0 1];       % CoM of Link 3
+T4mid = [eye(3), [0; 0; L4/2]; 0 0 0 1];       % CoM of Link 4
+
+T02 = simplify(T01 * T12);      % base to top of prismatic
+T03 = simplify(T02 * T23);      % + θ₂
+T04 = simplify(T03 * T34);      % + θ₃
+T05 = simplify(T04 * T45 * T56); % gripper
+T04mid = simplify(T03 * T3mid);    % CoM of Link 3
+T05mid = simplify(T04 * T45 * T4mid); % CoM of Link 4 (halfway along gripper)
+
+p1 = T01(1:3,4);  % after θ₁ + L1
+p2 = T02(1:3,4);  % after d
+p3 = T03(1:3,4);  % after θ₂
+p4 = T05(1:3,4);  
+p3mid = T04mid(1:3,4); % CoM of Link 3
+p4mid = T05mid(1:3,4); % CoM of Link 4
+
+%% Jacobians
+Jv1 = simplify(jacobian(p1, q));
+Jv2 = simplify(jacobian(p2, q));
+Jv3 = simplify(jacobian(p3mid, q));
+Jv4 = simplify(jacobian(p4mid, q));
+
+z0 = [0; 0; 1];
+R01 = T01(1:3,1:3);
+y1 = R01 * [0; 1; 0];
+R02 = T02(1:3,1:3);
+y2 = R02 * [0; 1; 0];
+
+Jw1 = [zeros(3,1), z0, zeros(3,1), zeros(3,1)];
+Jw2 = [zeros(3,1), z0, y1, zeros(3,1)];
+Jw3 = [zeros(3,1), z0, y1, y2];
+Jw4 = Jw3;
+
+%% Inertia tensors (diagonal for planar rotation)
+I1_mat = diag([0, 0, I1]);
+I2_mat = diag([0, 0, I2]);
+I3_mat = diag([0, 0, I3]);
+I4_mat = diag([0, 0, I4]);
+
+%% Mass matrix M(q)
+M1 = m1 * (Jv1.' * Jv1) + Jw1.' * I1_mat * Jw1;
+M2 = m2 * (Jv2.' * Jv2) + Jw2.' * I2_mat * Jw2;
+M3 = m3 * (Jv3.' * Jv3) + Jw3.' * I3_mat * Jw3;
+M4 = m4 * (Jv4.' * Jv4) + Jw4.' * I4_mat * Jw4;
+M = simplify(M1 + M2 + M3 + M4);
+
+%% Gravity vector
+h1 = p1(3); h2 = p2(3); h3 = p3(3); h4 = p4(3);
+U = m1*g*h1 + m2*g*h2 + m3*g*h3 + m4*g*h4;
+G = simplify(jacobian(U, q).');
+
+%% Coriolis matrix C(q,dq)
+C = sym(zeros(4));
+for i = 1:4
+    for j = 1:4
+        for k = 1:4
+            C(i,j) = C(i,j) + 0.5 * (...
+                diff(M(i,j), q(k)) + ...
+                diff(M(i,k), q(j)) - ...
+                diff(M(j,k), q(i))) * dq(k);
+        end
+    end
+end
+C = simplify(C);
+
+%% Kinetic and Potential Energy Functions
+T = simplify(0.5 * dq.' * M * dq);
+U = simplify(U);
+
+%% Export for simulation and analysis
+matlabFunction(M, 'Vars', {q, [m1 m2 m3 m4 L1 L2 L3 L4 I1 I2 I3 I4]}, 'File', 'M_matrix');
+matlabFunction(C, 'Vars', {q, dq, [m1 m2 m3 m4 L1 L2 L3 L4 I1 I2 I3 I4]}, 'File', 'C_matrix');
+matlabFunction(G, 'Vars', {q, [m1 m2 m3 m4 L1 L2 L3 L4 g]}, 'File', 'G_vector');
+matlabFunction(T, 'Vars', {q, dq, [m1 m2 m3 m4 L1 L2 L3 L4 I1 I2 I3 I4]}, 'File', 'KineticEnergy');
+matlabFunction(U, 'Vars', {q, [m1 m2 m3 m4 L1 L2 L3 L4 g]}, 'File', 'PotentialEnergy');
+
+%% Local helper functions
+function R = trotz(theta)
+    R = [cos(theta), -sin(theta), 0;
+         sin(theta),  cos(theta), 0;
+              0,           0,    1];
+end
+
+function R = troty(theta)
+    R = [ cos(theta), 0, sin(theta);
+                 0, 1,         0;
+         -sin(theta), 0, cos(theta)];
+end
