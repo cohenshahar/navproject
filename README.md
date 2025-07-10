@@ -4,7 +4,7 @@ This repository contains two parts:
 
 ## Part 1 – Robot (Main)
 This part contains the robot-related simulation and logic.  
-All files for Part 1 will be uploaded to this branch (`main`).
+
 
 ## Part 2 – MAHAC-based multi-robot warehouse simulation
 Available in the `MAHAC` branch.
