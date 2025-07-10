@@ -1,6 +1,6 @@
 # navproject
-part 1 and 2 of the project of shahar and shaked
-Shahar Cohen
-316490986
-Shaked Ozer
-208423921
+
+This repository contains Part 1 and Part 2 of the navigation project by:
+
+- **Shahar Cohen** – 316490986  
+- **Shaked Ozer** – 208423921
