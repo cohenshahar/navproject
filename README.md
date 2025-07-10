@@ -6,7 +6,7 @@ This folder contains symbolic modeling and simulation of a 4-DOF robotic arm, in
 
 ## Files Overview
 
-### 📌 `Robot_Dynamics_Symbolic.m`
+### `Robot_Dynamics_Symbolic.m`
 - Symbolically derives the dynamic model for a 4-DOF robot (1 prismatic + 3 revolute).
 - Generates:
   - Mass matrix `M(q)`
@@ -16,7 +16,7 @@ This folder contains symbolic modeling and simulation of a 4-DOF robotic arm, in
 - Automatically exports these as `.m` functions:
   - `M_matrix.m`, `C_matrix.m`, `G_vector.m`, `KineticEnergy.m`, `PotentialEnergy.m`
 
-### 📌 `Robot_Simulation_Main_1.m`
+### `Robot_Simulation_Main_1.m`
 - Simulates the motion of the robotic arm under:
   - Free motion (no control)
   - PID control to reach a target position
