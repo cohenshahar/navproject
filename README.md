@@ -45,9 +45,3 @@ This folder contains symbolic modeling and simulation of a 4-DOF robotic arm, in
 - Optimization Toolbox (for inverse kinematics with `fmincon`)
 - SolidWorks or compatible CAD viewer for 3D model
 
----
-
-## Authors
-
-- **Shahar Cohen** – 316490986  
-- **Shaked Ozer** – 208423921
